@@ -147,3 +147,5 @@ The server-side follows a Node.js Express architecture:
 - Consistent design system enforcement
 
 The architecture prioritizes developer experience, type safety, and real-time capabilities while maintaining simplicity and scalability for educational use cases.
+
+hellow world
