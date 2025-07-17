@@ -1,113 +1,159 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { storage } from "./storage";
+import { setupAuth, requireAuth } from "./auth";
+import {
+  insertUserSchema,
+  insertRoomSchema,
+  insertMessageSchema,
+  insertFileSchema,
+  type User,
+} from "@shared/schema";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
-import { 
-  insertRoomSchema, 
-  insertMessageSchema, 
-  insertSubjectSchema,
-  insertSubcategorySchema,
-  insertFriendshipSchema 
-} from "@shared/schema";
 
-// Configure multer for file uploads
+// Set up file uploads
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const uploadDir = path.join(process.cwd(), 'uploads');
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-    }
-  }),
+  dest: "uploads/",
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
-  }
+  },
 });
 
-// WebSocket connection management
-const wsConnections = new Map<string, WebSocket>();
+// WebSocket connection tracking
+const userConnections = new Map<number, WebSocket>();
+const roomConnections = new Map<number, Set<WebSocket>>();
 
-export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
+export function registerRoutes(app: Express): Server {
+  // Setup authentication routes first
+  setupAuth(app);
 
-  // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
-  });
-
-  // User routes
-  app.put('/api/users/profile', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { username, bio, status } = req.body;
-      
-      const updatedUser = await storage.updateUserProfile(userId, {
-        username,
-        bio,
-        status,
-      });
-      
-      res.json(updatedUser);
-    } catch (error) {
-      console.error("Error updating profile:", error);
-      res.status(500).json({ message: "Failed to update profile" });
-    }
-  });
-
-  app.get('/api/users/search', isAuthenticated, async (req: any, res) => {
+  // User management routes
+  app.get("/api/users/search", requireAuth, async (req: any, res) => {
     try {
       const { q } = req.query;
-      if (!q || typeof q !== 'string') {
-        return res.status(400).json({ message: "Query parameter required" });
+      if (!q || typeof q !== "string") {
+        return res.status(400).json({ message: "Search query required" });
       }
       
       const users = await storage.searchUsers(q);
-      res.json(users);
+      // Remove sensitive data
+      const sanitizedUsers = users.map(user => ({
+        id: user.id,
+        username: user.username,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        profileImageUrl: user.profileImageUrl,
+        bio: user.bio,
+        status: user.status,
+      }));
+      
+      res.json(sanitizedUsers);
     } catch (error) {
       console.error("Error searching users:", error);
       res.status(500).json({ message: "Failed to search users" });
     }
   });
 
-  // Friend routes
-  app.post('/api/friends/request', isAuthenticated, async (req: any, res) => {
+  app.get("/api/users/:id", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const data = insertFriendshipSchema.parse({
-        requesterId: userId,
-        addresseeId: req.body.addresseeId,
-      });
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Remove sensitive data
+      const sanitizedUser = {
+        id: user.id,
+        username: user.username,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        profileImageUrl: user.profileImageUrl,
+        bio: user.bio,
+        status: user.status,
+      };
+
+      res.json(sanitizedUser);
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  app.patch("/api/users/:id", requireAuth, async (req: any, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId) || userId !== req.user.id) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const updates = insertUserSchema.partial().parse(req.body);
+      const updatedUser = await storage.updateUser(userId, updates);
       
-      const friendship = await storage.sendFriendRequest(data.requesterId, data.addresseeId);
-      res.json(friendship);
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      res.json({
+        id: updatedUser.id,
+        username: updatedUser.username,
+        firstName: updatedUser.firstName,
+        lastName: updatedUser.lastName,
+        profileImageUrl: updatedUser.profileImageUrl,
+        bio: updatedUser.bio,
+        status: updatedUser.status,
+      });
+    } catch (error) {
+      console.error("Error updating user:", error);
+      res.status(500).json({ message: "Failed to update user" });
+    }
+  });
+
+  // Friend management routes
+  app.get("/api/friends", requireAuth, async (req: any, res) => {
+    try {
+      const friends = await storage.getFriends(req.user.id);
+      const sanitizedFriends = friends.map(friend => ({
+        id: friend.id,
+        username: friend.username,
+        firstName: friend.firstName,
+        lastName: friend.lastName,
+        profileImageUrl: friend.profileImageUrl,
+        bio: friend.bio,
+        status: friend.status,
+      }));
+      res.json(sanitizedFriends);
+    } catch (error) {
+      console.error("Error fetching friends:", error);
+      res.status(500).json({ message: "Failed to fetch friends" });
+    }
+  });
+
+  app.post("/api/friends/request", requireAuth, async (req: any, res) => {
+    try {
+      const { addresseeId } = req.body;
+      if (!addresseeId || isNaN(parseInt(addresseeId))) {
+        return res.status(400).json({ message: "Valid addressee ID required" });
+      }
+
+      const friendship = await storage.sendFriendRequest(req.user.id, parseInt(addresseeId));
+      res.status(201).json(friendship);
     } catch (error) {
       console.error("Error sending friend request:", error);
       res.status(500).json({ message: "Failed to send friend request" });
     }
   });
 
-  app.get('/api/friends/requests', isAuthenticated, async (req: any, res) => {
+  app.get("/api/friends/requests", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const requests = await storage.getFriendRequests(userId);
+      const requests = await storage.getFriendRequests(req.user.id);
       res.json(requests);
     } catch (error) {
       console.error("Error fetching friend requests:", error);
@@ -115,60 +161,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/friends/requests/:id/accept', isAuthenticated, async (req: any, res) => {
+  app.patch("/api/friends/requests/:id/accept", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      await storage.acceptFriendRequest(parseInt(id));
-      res.json({ success: true });
+      const requestId = parseInt(req.params.id);
+      if (isNaN(requestId)) {
+        return res.status(400).json({ message: "Invalid request ID" });
+      }
+
+      const friendship = await storage.acceptFriendRequest(requestId);
+      if (!friendship) {
+        return res.status(404).json({ message: "Friend request not found" });
+      }
+
+      res.json(friendship);
     } catch (error) {
       console.error("Error accepting friend request:", error);
       res.status(500).json({ message: "Failed to accept friend request" });
     }
   });
 
-  app.post('/api/friends/requests/:id/reject', isAuthenticated, async (req: any, res) => {
+  app.patch("/api/friends/requests/:id/reject", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      await storage.rejectFriendRequest(parseInt(id));
-      res.json({ success: true });
+      const requestId = parseInt(req.params.id);
+      if (isNaN(requestId)) {
+        return res.status(400).json({ message: "Invalid request ID" });
+      }
+
+      const friendship = await storage.rejectFriendRequest(requestId);
+      if (!friendship) {
+        return res.status(404).json({ message: "Friend request not found" });
+      }
+
+      res.json(friendship);
     } catch (error) {
       console.error("Error rejecting friend request:", error);
       res.status(500).json({ message: "Failed to reject friend request" });
     }
   });
 
-  app.get('/api/friends', isAuthenticated, async (req: any, res) => {
+  // Room management routes
+  app.get("/api/rooms", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const friends = await storage.getFriends(userId);
-      res.json(friends);
-    } catch (error) {
-      console.error("Error fetching friends:", error);
-      res.status(500).json({ message: "Failed to fetch friends" });
-    }
-  });
-
-  // Room routes
-  app.post('/api/rooms', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const data = insertRoomSchema.parse({
-        ...req.body,
-        creatorId: userId,
-      });
-      
-      const room = await storage.createRoom(data);
-      res.json(room);
-    } catch (error) {
-      console.error("Error creating room:", error);
-      res.status(500).json({ message: "Failed to create room" });
-    }
-  });
-
-  app.get('/api/rooms', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const rooms = await storage.getUserRooms(userId);
+      const rooms = await storage.getRooms(req.user.id);
       res.json(rooms);
     } catch (error) {
       console.error("Error fetching rooms:", error);
@@ -176,13 +210,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/rooms/:id', isAuthenticated, async (req: any, res) => {
+  app.post("/api/rooms", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const room = await storage.getRoomById(parseInt(id));
+      const roomData = insertRoomSchema.parse({
+        ...req.body,
+        creatorId: req.user.id,
+      });
+
+      const room = await storage.createRoom(roomData);
+      res.status(201).json(room);
+    } catch (error) {
+      console.error("Error creating room:", error);
+      res.status(500).json({ message: "Failed to create room" });
+    }
+  });
+
+  app.get("/api/rooms/:id", requireAuth, async (req: any, res) => {
+    try {
+      const roomId = parseInt(req.params.id);
+      if (isNaN(roomId)) {
+        return res.status(400).json({ message: "Invalid room ID" });
+      }
+
+      const room = await storage.getRoom(roomId);
       if (!room) {
         return res.status(404).json({ message: "Room not found" });
       }
+
       res.json(room);
     } catch (error) {
       console.error("Error fetching room:", error);
@@ -190,51 +244,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/rooms/:id/members', isAuthenticated, async (req: any, res) => {
+  app.post("/api/rooms/:id/join", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const { userId, role } = req.body;
-      
-      await storage.addRoomMember(parseInt(id), userId, role);
-      res.json({ success: true });
+      const roomId = parseInt(req.params.id);
+      if (isNaN(roomId)) {
+        return res.status(400).json({ message: "Invalid room ID" });
+      }
+
+      const member = await storage.addUserToRoom(roomId, req.user.id);
+      res.status(201).json(member);
     } catch (error) {
-      console.error("Error adding room member:", error);
-      res.status(500).json({ message: "Failed to add room member" });
+      console.error("Error joining room:", error);
+      res.status(500).json({ message: "Failed to join room" });
     }
   });
 
-  app.get('/api/rooms/:id/members', isAuthenticated, async (req: any, res) => {
+  app.get("/api/rooms/:id/members", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const members = await storage.getRoomMembers(parseInt(id));
-      res.json(members);
+      const roomId = parseInt(req.params.id);
+      if (isNaN(roomId)) {
+        return res.status(400).json({ message: "Invalid room ID" });
+      }
+
+      const members = await storage.getRoomMembers(roomId);
+      const sanitizedMembers = members.map(member => ({
+        id: member.id,
+        username: member.username,
+        firstName: member.firstName,
+        lastName: member.lastName,
+        profileImageUrl: member.profileImageUrl,
+        bio: member.bio,
+        status: member.status,
+      }));
+      
+      res.json(sanitizedMembers);
     } catch (error) {
       console.error("Error fetching room members:", error);
       res.status(500).json({ message: "Failed to fetch room members" });
     }
   });
 
-  // Subject routes
-  app.post('/api/rooms/:id/subjects', isAuthenticated, async (req: any, res) => {
+  // Subject and subcategory routes
+  app.get("/api/subjects", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const data = insertSubjectSchema.parse({
-        roomId: parseInt(id),
-        name: req.body.name,
-      });
-      
-      const subject = await storage.createSubject(data);
-      res.json(subject);
-    } catch (error) {
-      console.error("Error creating subject:", error);
-      res.status(500).json({ message: "Failed to create subject" });
-    }
-  });
-
-  app.get('/api/rooms/:id/subjects', isAuthenticated, async (req: any, res) => {
-    try {
-      const { id } = req.params;
-      const subjects = await storage.getRoomSubjects(parseInt(id));
+      const subjects = await storage.getSubjects();
       res.json(subjects);
     } catch (error) {
       console.error("Error fetching subjects:", error);
@@ -242,26 +295,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/subjects/:id/subcategories', isAuthenticated, async (req: any, res) => {
+  app.post("/api/subjects", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const data = insertSubcategorySchema.parse({
-        subjectId: parseInt(id),
-        name: req.body.name,
-      });
-      
-      const subcategory = await storage.createSubcategory(data);
-      res.json(subcategory);
+      const { name } = req.body;
+      if (!name || typeof name !== "string") {
+        return res.status(400).json({ message: "Subject name required" });
+      }
+
+      const subject = await storage.createSubject(name);
+      res.status(201).json(subject);
     } catch (error) {
-      console.error("Error creating subcategory:", error);
-      res.status(500).json({ message: "Failed to create subcategory" });
+      console.error("Error creating subject:", error);
+      res.status(500).json({ message: "Failed to create subject" });
     }
   });
 
-  app.get('/api/subjects/:id/subcategories', isAuthenticated, async (req: any, res) => {
+  app.get("/api/subcategories", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const subcategories = await storage.getSubjectSubcategories(parseInt(id));
+      const { subjectId } = req.query;
+      const subcategories = await storage.getSubcategories(
+        subjectId ? parseInt(subjectId as string) : undefined
+      );
       res.json(subcategories);
     } catch (error) {
       console.error("Error fetching subcategories:", error);
@@ -269,17 +323,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Message routes
-  app.get('/api/rooms/:id/messages', isAuthenticated, async (req: any, res) => {
+  app.post("/api/subcategories", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const { limit = 50, offset = 0 } = req.query;
+      const { name, subjectId } = req.body;
+      if (!name || !subjectId || isNaN(parseInt(subjectId))) {
+        return res.status(400).json({ message: "Name and valid subject ID required" });
+      }
+
+      const subcategory = await storage.createSubcategory(name, parseInt(subjectId));
+      res.status(201).json(subcategory);
+    } catch (error) {
+      console.error("Error creating subcategory:", error);
+      res.status(500).json({ message: "Failed to create subcategory" });
+    }
+  });
+
+  // Message routes
+  app.get("/api/messages", requireAuth, async (req: any, res) => {
+    try {
+      const { roomId, recipientId } = req.query;
       
-      const messages = await storage.getRoomMessages(
-        parseInt(id),
-        parseInt(limit as string),
-        parseInt(offset as string)
-      );
+      let messages;
+      if (roomId) {
+        messages = await storage.getMessages(parseInt(roomId as string));
+      } else if (recipientId) {
+        messages = await storage.getDirectMessages(req.user.id, parseInt(recipientId as string));
+      } else {
+        return res.status(400).json({ message: "Room ID or recipient ID required" });
+      }
+
       res.json(messages);
     } catch (error) {
       console.error("Error fetching messages:", error);
@@ -287,66 +359,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/messages/direct/:userId', isAuthenticated, async (req: any, res) => {
+  app.post("/api/messages", requireAuth, async (req: any, res) => {
     try {
-      const currentUserId = req.user.claims.sub;
-      const { userId } = req.params;
-      const { limit = 50, offset = 0 } = req.query;
+      const messageData = insertMessageSchema.parse({
+        ...req.body,
+        senderId: req.user.id,
+      });
+
+      const message = await storage.createMessage(messageData);
       
-      const messages = await storage.getDirectMessages(
-        currentUserId,
-        userId,
-        parseInt(limit as string),
-        parseInt(offset as string)
-      );
-      res.json(messages);
+      // Broadcast to WebSocket connections
+      if (message.roomId) {
+        const roomConnections = roomConnections.get(message.roomId);
+        if (roomConnections) {
+          const messagePayload = JSON.stringify({
+            type: "new_message",
+            data: message,
+          });
+          
+          roomConnections.forEach(ws => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(messagePayload);
+            }
+          });
+        }
+      } else if (message.recipientId) {
+        const recipientWs = userConnections.get(message.recipientId);
+        const senderWs = userConnections.get(message.senderId);
+        
+        const messagePayload = JSON.stringify({
+          type: "new_message",
+          data: message,
+        });
+        
+        [recipientWs, senderWs].forEach(ws => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(messagePayload);
+          }
+        });
+      }
+
+      res.status(201).json(message);
     } catch (error) {
-      console.error("Error fetching direct messages:", error);
-      res.status(500).json({ message: "Failed to fetch direct messages" });
+      console.error("Error creating message:", error);
+      res.status(500).json({ message: "Failed to create message" });
     }
   });
 
   // File routes
-  app.post('/api/files/upload', isAuthenticated, upload.single('file'), async (req: any, res) => {
+  app.post("/api/files", requireAuth, upload.single("file"), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const file = req.file;
-      const { roomId, subjectId, subcategoryId, fileName } = req.body;
-      
-      if (!file) {
+      if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
-      
-      const fileData = {
-        originalName: file.originalname,
-        fileName: fileName || file.originalname,
-        fileType: file.mimetype,
-        fileSize: file.size,
-        filePath: file.path,
-        uploaderId: userId,
-        roomId: roomId ? parseInt(roomId) : null,
-        subjectId: subjectId ? parseInt(subjectId) : null,
-        subcategoryId: subcategoryId ? parseInt(subcategoryId) : null,
-      };
-      
-      const uploadedFile = await storage.createFile(fileData);
-      res.json(uploadedFile);
+
+      const fileData = insertFileSchema.parse({
+        fileName: req.file.originalname,
+        originalName: req.file.originalname,
+        filePath: req.file.path,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        uploadedById: req.user.id,
+        roomId: req.body.roomId ? parseInt(req.body.roomId) : null,
+        subjectId: req.body.subjectId ? parseInt(req.body.subjectId) : null,
+        subcategoryId: req.body.subcategoryId ? parseInt(req.body.subcategoryId) : null,
+        description: req.body.description || null,
+        isPublic: req.body.isPublic === "true",
+      });
+
+      const file = await storage.createFile(fileData);
+      res.status(201).json(file);
     } catch (error) {
       console.error("Error uploading file:", error);
       res.status(500).json({ message: "Failed to upload file" });
     }
   });
 
-  app.get('/api/rooms/:id/files', isAuthenticated, async (req: any, res) => {
+  app.get("/api/files", requireAuth, async (req: any, res) => {
     try {
-      const { id } = req.params;
-      const { subjectId, subcategoryId } = req.query;
+      const { roomId, uploadedById, subjectId, subcategoryId } = req.query;
       
-      const files = await storage.getRoomFiles(
-        parseInt(id),
-        subjectId ? parseInt(subjectId as string) : undefined,
-        subcategoryId ? parseInt(subcategoryId as string) : undefined
-      );
+      let files;
+      if (subjectId) {
+        files = await storage.getFilesBySubject(parseInt(subjectId as string));
+      } else if (subcategoryId) {
+        files = await storage.getFilesBySubcategory(parseInt(subcategoryId as string));
+      } else {
+        files = await storage.getFiles(
+          roomId ? parseInt(roomId as string) : undefined,
+          uploadedById ? parseInt(uploadedById as string) : undefined
+        );
+      }
+
       res.json(files);
     } catch (error) {
       console.error("Error fetching files:", error);
@@ -354,178 +458,114 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/files/search', isAuthenticated, async (req: any, res) => {
+  app.get("/api/files/:id/download", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const { q } = req.query;
-      
-      if (!q || typeof q !== 'string') {
-        return res.status(400).json({ message: "Query parameter required" });
+      const fileId = parseInt(req.params.id);
+      if (isNaN(fileId)) {
+        return res.status(400).json({ message: "Invalid file ID" });
       }
-      
-      const files = await storage.searchFiles(q, userId);
-      res.json(files);
-    } catch (error) {
-      console.error("Error searching files:", error);
-      res.status(500).json({ message: "Failed to search files" });
-    }
-  });
 
-  app.delete('/api/files/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { id } = req.params;
-      
-      await storage.deleteFile(parseInt(id), userId);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting file:", error);
-      res.status(500).json({ message: "Failed to delete file" });
-    }
-  });
+      const file = await storage.getFile(fileId);
+      if (!file) {
+        return res.status(404).json({ message: "File not found" });
+      }
 
-  // Call routes
-  app.post('/api/calls', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { calleeId, roomId, callType } = req.body;
-      
-      const call = await storage.createCall(userId, calleeId, roomId, callType);
-      res.json(call);
-    } catch (error) {
-      console.error("Error creating call:", error);
-      res.status(500).json({ message: "Failed to create call" });
-    }
-  });
+      const filePath = path.resolve(file.filePath);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File not found on disk" });
+      }
 
-  app.get('/api/calls', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const calls = await storage.getUserCalls(userId);
-      res.json(calls);
+      res.download(filePath, file.originalName);
     } catch (error) {
-      console.error("Error fetching calls:", error);
-      res.status(500).json({ message: "Failed to fetch calls" });
+      console.error("Error downloading file:", error);
+      res.status(500).json({ message: "Failed to download file" });
     }
   });
 
   // Status routes
-  app.post('/api/status', isAuthenticated, async (req: any, res) => {
+  app.post("/api/status", requireAuth, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const { content, type } = req.body;
-      
-      const status = await storage.createStatus(userId, content, type);
-      res.json(status);
-    } catch (error) {
-      console.error("Error creating status:", error);
-      res.status(500).json({ message: "Failed to create status" });
-    }
-  });
+      const { status, roomId } = req.body;
+      if (!status || typeof status !== "string") {
+        return res.status(400).json({ message: "Status required" });
+      }
 
-  app.get('/api/status/feed', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const statuses = await storage.getFriendsStatuses(userId);
-      res.json(statuses);
+      const userStatus = await storage.updateUserStatus(
+        req.user.id,
+        status,
+        roomId ? parseInt(roomId) : undefined
+      );
+      
+      res.json(userStatus);
     } catch (error) {
-      console.error("Error fetching status feed:", error);
-      res.status(500).json({ message: "Failed to fetch status feed" });
+      console.error("Error updating status:", error);
+      res.status(500).json({ message: "Failed to update status" });
     }
   });
 
   const httpServer = createServer(app);
 
-  // WebSocket server setup
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  // Set up WebSocket server
+  const wss = new WebSocketServer({ 
+    server: httpServer, 
+    path: "/ws" 
+  });
 
-  wss.on('connection', (ws: WebSocket, req) => {
-    console.log('WebSocket client connected');
+  wss.on("connection", (ws: WebSocket, req) => {
+    console.log("New WebSocket connection");
 
-    ws.on('message', async (message: string) => {
+    ws.on("message", async (data) => {
       try {
-        const data = JSON.parse(message);
+        const message = JSON.parse(data.toString());
         
-        switch (data.type) {
-          case 'join':
-            wsConnections.set(data.userId, ws);
+        switch (message.type) {
+          case "authenticate":
+            // In a real app, you'd verify the auth token here
+            const userId = message.userId;
+            if (userId) {
+              userConnections.set(userId, ws);
+              ws.send(JSON.stringify({ type: "authenticated", userId }));
+            }
             break;
             
-          case 'message':
-            // Create message in database
-            const newMessage = await storage.createMessage({
-              content: data.content,
-              senderId: data.senderId,
-              roomId: data.roomId,
-              recipientId: data.recipientId,
-              messageType: data.messageType || 'text',
-            });
-            
-            // Broadcast to room members or direct message recipient
-            if (data.roomId) {
-              const members = await storage.getRoomMembers(data.roomId);
-              members.forEach(member => {
-                const memberWs = wsConnections.get(member.userId);
-                if (memberWs && memberWs.readyState === WebSocket.OPEN) {
-                  memberWs.send(JSON.stringify({
-                    type: 'message',
-                    message: newMessage,
-                  }));
-                }
-              });
-            } else if (data.recipientId) {
-              const recipientWs = wsConnections.get(data.recipientId);
-              if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
-                recipientWs.send(JSON.stringify({
-                  type: 'message',
-                  message: newMessage,
-                }));
+          case "join_room":
+            const roomId = message.roomId;
+            if (roomId) {
+              if (!roomConnections.has(roomId)) {
+                roomConnections.set(roomId, new Set());
               }
+              roomConnections.get(roomId)!.add(ws);
+              ws.send(JSON.stringify({ type: "joined_room", roomId }));
             }
             break;
             
-          case 'typing':
-            // Broadcast typing indicator
-            if (data.roomId) {
-              const members = await storage.getRoomMembers(data.roomId);
-              members.forEach(member => {
-                if (member.userId !== data.userId) {
-                  const memberWs = wsConnections.get(member.userId);
-                  if (memberWs && memberWs.readyState === WebSocket.OPEN) {
-                    memberWs.send(JSON.stringify({
-                      type: 'typing',
-                      userId: data.userId,
-                      roomId: data.roomId,
-                      isTyping: data.isTyping,
-                    }));
-                  }
-                }
-              });
-            }
-            break;
-            
-          case 'call':
-            // Handle call signaling
-            const targetWs = wsConnections.get(data.targetUserId);
-            if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-              targetWs.send(JSON.stringify(data));
+          case "leave_room":
+            const leaveRoomId = message.roomId;
+            if (leaveRoomId && roomConnections.has(leaveRoomId)) {
+              roomConnections.get(leaveRoomId)!.delete(ws);
             }
             break;
         }
       } catch (error) {
-        console.error('WebSocket message error:', error);
+        console.error("WebSocket message error:", error);
       }
     });
 
-    ws.on('close', () => {
-      // Remove connection from map
-      for (const [userId, connection] of wsConnections.entries()) {
+    ws.on("close", () => {
+      // Clean up connections
+      for (const [userId, connection] of userConnections.entries()) {
         if (connection === ws) {
-          wsConnections.delete(userId);
+          userConnections.delete(userId);
           break;
         }
       }
-      console.log('WebSocket client disconnected');
+      
+      for (const [roomId, connections] of roomConnections.entries()) {
+        connections.delete(ws);
+        if (connections.size === 0) {
+          roomConnections.delete(roomId);
+        }
+      }
     });
   });
 

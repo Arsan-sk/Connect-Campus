@@ -1,134 +1,116 @@
 import {
   users,
   rooms,
+  roomMembers,
   messages,
   files,
+  friendships,
   subjects,
   subcategories,
-  friendships,
-  roomMembers,
-  messageStatus,
-  calls,
   statuses,
-  statusReactions,
   type User,
-  type UpsertUser,
-  type InsertRoom,
-  type InsertMessage,
-  type InsertFile,
-  type InsertSubject,
-  type InsertSubcategory,
-  type InsertFriendship,
+  type InsertUser,
   type Room,
+  type InsertRoom,
   type Message,
+  type InsertMessage,
   type File,
+  type InsertFile,
+  type Friendship,
+  type InsertFriendship,
   type Subject,
   type Subcategory,
-  type Friendship,
   type RoomMember,
-  type MessageStatus,
-  type Call,
   type Status,
-  type StatusReaction,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, asc, sql, inArray } from "drizzle-orm";
+import { eq, and, or, desc, asc, like, inArray } from "drizzle-orm";
 
+// Interface for storage operations
 export interface IStorage {
-  // User operations - mandatory for Replit Auth
-  getUser(id: string): Promise<User | undefined>;
-  upsertUser(user: UpsertUser): Promise<User>;
-  
-  // User management
-  updateUserProfile(id: string, data: Partial<User>): Promise<User>;
+  // User operations
+  getUser(id: number): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: number, updates: Partial<InsertUser>): Promise<User | undefined>;
   searchUsers(query: string): Promise<User[]>;
-  
+
   // Friend operations
-  sendFriendRequest(requesterId: string, addresseeId: string): Promise<Friendship>;
-  getFriendRequests(userId: string): Promise<Friendship[]>;
-  acceptFriendRequest(friendshipId: number): Promise<void>;
-  rejectFriendRequest(friendshipId: number): Promise<void>;
-  getFriends(userId: string): Promise<User[]>;
-  areFriends(userId1: string, userId2: string): Promise<boolean>;
-  
+  sendFriendRequest(requesterId: number, addresseeId: number): Promise<Friendship>;
+  acceptFriendRequest(friendshipId: number): Promise<Friendship | undefined>;
+  rejectFriendRequest(friendshipId: number): Promise<Friendship | undefined>;
+  getFriends(userId: number): Promise<User[]>;
+  getFriendRequests(userId: number): Promise<Friendship[]>;
+  getSentFriendRequests(userId: number): Promise<Friendship[]>;
+
   // Room operations
   createRoom(room: InsertRoom): Promise<Room>;
-  getUserRooms(userId: string): Promise<Room[]>;
-  getRoomById(id: number): Promise<Room | undefined>;
-  updateRoom(id: number, data: Partial<Room>): Promise<Room>;
-  addRoomMember(roomId: number, userId: string, role?: string): Promise<void>;
-  removeRoomMember(roomId: number, userId: string): Promise<void>;
-  getRoomMembers(roomId: number): Promise<RoomMember[]>;
-  
-  // Subject/Subcategory operations
-  createSubject(subject: InsertSubject): Promise<Subject>;
-  createSubcategory(subcategory: InsertSubcategory): Promise<Subcategory>;
-  getRoomSubjects(roomId: number): Promise<Subject[]>;
-  getSubjectSubcategories(subjectId: number): Promise<Subcategory[]>;
-  updateSubject(id: number, name: string): Promise<Subject>;
-  updateSubcategory(id: number, name: string): Promise<Subcategory>;
-  deleteSubject(id: number): Promise<void>;
-  deleteSubcategory(id: number): Promise<void>;
-  
+  getRooms(userId: number): Promise<Room[]>;
+  getRoom(id: number): Promise<Room | undefined>;
+  updateRoom(id: number, updates: Partial<InsertRoom>): Promise<Room | undefined>;
+  deleteRoom(id: number): Promise<boolean>;
+  addUserToRoom(roomId: number, userId: number, role?: string): Promise<RoomMember>;
+  removeUserFromRoom(roomId: number, userId: number): Promise<boolean>;
+  getRoomMembers(roomId: number): Promise<User[]>;
+
   // Message operations
   createMessage(message: InsertMessage): Promise<Message>;
-  getRoomMessages(roomId: number, limit?: number, offset?: number): Promise<Message[]>;
-  getDirectMessages(userId1: string, userId2: string, limit?: number, offset?: number): Promise<Message[]>;
-  updateMessage(id: number, content: string): Promise<Message>;
-  deleteMessage(id: number, userId: string): Promise<void>;
-  updateMessageStatus(messageId: number, userId: string, status: string): Promise<void>;
-  
+  getMessages(roomId?: number, recipientId?: number, senderId?: number): Promise<Message[]>;
+  getDirectMessages(userId1: number, userId2: number): Promise<Message[]>;
+  updateMessage(id: number, updates: Partial<InsertMessage>): Promise<Message | undefined>;
+  deleteMessage(id: number): Promise<boolean>;
+
   // File operations
   createFile(file: InsertFile): Promise<File>;
-  getRoomFiles(roomId: number, subjectId?: number, subcategoryId?: number): Promise<File[]>;
-  getUserFiles(userId: string): Promise<File[]>;
-  getFileById(id: number): Promise<File | undefined>;
-  deleteFile(id: number, userId: string): Promise<void>;
-  searchFiles(query: string, userId: string): Promise<File[]>;
-  
-  // Call operations
-  createCall(callerId: string, calleeId?: string, roomId?: number, callType?: string): Promise<Call>;
-  updateCallStatus(id: number, status: string, endedAt?: Date): Promise<void>;
-  getUserCalls(userId: string): Promise<Call[]>;
-  
+  getFiles(roomId?: number, uploadedById?: number): Promise<File[]>;
+  getFile(id: number): Promise<File | undefined>;
+  updateFile(id: number, updates: Partial<InsertFile>): Promise<File | undefined>;
+  deleteFile(id: number): Promise<boolean>;
+  getFilesBySubject(subjectId: number): Promise<File[]>;
+  getFilesBySubcategory(subcategoryId: number): Promise<File[]>;
+
+  // Subject and subcategory operations
+  getSubjects(): Promise<Subject[]>;
+  createSubject(name: string): Promise<Subject>;
+  getSubcategories(subjectId?: number): Promise<Subcategory[]>;
+  createSubcategory(name: string, subjectId: number): Promise<Subcategory>;
+
   // Status operations
-  createStatus(userId: string, content: string, type?: string): Promise<Status>;
-  getUserStatuses(userId: string): Promise<Status[]>;
-  getFriendsStatuses(userId: string): Promise<Status[]>;
-  addStatusReaction(statusId: number, userId: string, reaction: string): Promise<void>;
-  removeStatusReaction(statusId: number, userId: string): Promise<void>;
+  updateUserStatus(userId: number, status: string, roomId?: number): Promise<Status>;
+  getUserStatuses(userIds: number[]): Promise<Status[]>;
+  deleteUserStatus(userId: number, roomId?: number): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
-  // User operations - mandatory for Replit Auth
-  async getUser(id: string): Promise<User | undefined> {
+  // User operations
+  async getUser(id: number): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
   }
 
-  async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.username, username));
     return user;
   }
 
-  // User management
-  async updateUserProfile(id: string, data: Partial<User>): Promise<User> {
-    const [user] = await db
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const [newUser] = await db.insert(users).values(user).returning();
+    return newUser;
+  }
+
+  async updateUser(id: number, updates: Partial<InsertUser>): Promise<User | undefined> {
+    const [updatedUser] = await db
       .update(users)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...updates, updatedAt: new Date() })
       .where(eq(users.id, id))
       .returning();
-    return user;
+    return updatedUser;
   }
 
   async searchUsers(query: string): Promise<User[]> {
@@ -137,210 +119,145 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(
         or(
-          sql`${users.username} ILIKE ${`%${query}%`}`,
-          sql`${users.firstName} ILIKE ${`%${query}%`}`,
-          sql`${users.lastName} ILIKE ${`%${query}%`}`
+          like(users.username, `%${query}%`),
+          like(users.firstName, `%${query}%`),
+          like(users.lastName, `%${query}%`)
         )
       )
       .limit(20);
   }
 
   // Friend operations
-  async sendFriendRequest(requesterId: string, addresseeId: string): Promise<Friendship> {
+  async sendFriendRequest(requesterId: number, addresseeId: number): Promise<Friendship> {
     const [friendship] = await db
       .insert(friendships)
-      .values({
-        requesterId,
-        addresseeId,
-        status: "pending",
-      })
+      .values({ requesterId, addresseeId })
       .returning();
     return friendship;
   }
 
-  async getFriendRequests(userId: string): Promise<Friendship[]> {
-    return await db
-      .select()
-      .from(friendships)
-      .where(and(eq(friendships.addresseeId, userId), eq(friendships.status, "pending")))
-      .orderBy(desc(friendships.createdAt));
-  }
-
-  async acceptFriendRequest(friendshipId: number): Promise<void> {
-    await db
+  async acceptFriendRequest(friendshipId: number): Promise<Friendship | undefined> {
+    const [friendship] = await db
       .update(friendships)
       .set({ status: "accepted", updatedAt: new Date() })
-      .where(eq(friendships.id, friendshipId));
+      .where(eq(friendships.id, friendshipId))
+      .returning();
+    return friendship;
   }
 
-  async rejectFriendRequest(friendshipId: number): Promise<void> {
-    await db
+  async rejectFriendRequest(friendshipId: number): Promise<Friendship | undefined> {
+    const [friendship] = await db
       .update(friendships)
       .set({ status: "rejected", updatedAt: new Date() })
-      .where(eq(friendships.id, friendshipId));
+      .where(eq(friendships.id, friendshipId))
+      .returning();
+    return friendship;
   }
 
-  async getFriends(userId: string): Promise<User[]> {
-    const friendIds = await db
-      .select({
-        friendId: sql<string>`CASE 
-          WHEN ${friendships.requesterId} = ${userId} THEN ${friendships.addresseeId}
-          ELSE ${friendships.requesterId}
-        END`.as("friendId"),
-      })
+  async getFriends(userId: number): Promise<User[]> {
+    const friendshipsList = await db
+      .select()
       .from(friendships)
       .where(
         and(
-          or(
-            eq(friendships.requesterId, userId),
-            eq(friendships.addresseeId, userId)
-          ),
+          or(eq(friendships.requesterId, userId), eq(friendships.addresseeId, userId)),
           eq(friendships.status, "accepted")
         )
       );
+
+    const friendIds = friendshipsList.map((f) =>
+      f.requesterId === userId ? f.addresseeId : f.requesterId
+    );
 
     if (friendIds.length === 0) return [];
 
-    return await db
-      .select()
-      .from(users)
-      .where(inArray(users.id, friendIds.map(f => f.friendId)));
+    return await db.select().from(users).where(inArray(users.id, friendIds));
   }
 
-  async areFriends(userId1: string, userId2: string): Promise<boolean> {
-    const [friendship] = await db
+  async getFriendRequests(userId: number): Promise<Friendship[]> {
+    return await db
       .select()
       .from(friendships)
       .where(
-        and(
-          or(
-            and(eq(friendships.requesterId, userId1), eq(friendships.addresseeId, userId2)),
-            and(eq(friendships.requesterId, userId2), eq(friendships.addresseeId, userId1))
-          ),
-          eq(friendships.status, "accepted")
-        )
+        and(eq(friendships.addresseeId, userId), eq(friendships.status, "pending"))
       );
-    return !!friendship;
+  }
+
+  async getSentFriendRequests(userId: number): Promise<Friendship[]> {
+    return await db
+      .select()
+      .from(friendships)
+      .where(
+        and(eq(friendships.requesterId, userId), eq(friendships.status, "pending"))
+      );
   }
 
   // Room operations
   async createRoom(room: InsertRoom): Promise<Room> {
     const [newRoom] = await db.insert(rooms).values(room).returning();
     
-    // Add creator as member with creator role
+    // Add creator as admin
     await db.insert(roomMembers).values({
       roomId: newRoom.id,
       userId: room.creatorId,
-      role: "creator",
+      role: "admin",
     });
 
     return newRoom;
   }
 
-  async getUserRooms(userId: string): Promise<Room[]> {
-    return await db
-      .select({
-        id: rooms.id,
-        name: rooms.name,
-        description: rooms.description,
-        imageUrl: rooms.imageUrl,
-        creatorId: rooms.creatorId,
-        createdAt: rooms.createdAt,
-        updatedAt: rooms.updatedAt,
-      })
+  async getRooms(userId: number): Promise<Room[]> {
+    const userRooms = await db
+      .select({ room: rooms })
       .from(rooms)
       .innerJoin(roomMembers, eq(rooms.id, roomMembers.roomId))
-      .where(eq(roomMembers.userId, userId))
-      .orderBy(desc(rooms.updatedAt));
+      .where(eq(roomMembers.userId, userId));
+
+    return userRooms.map((ur) => ur.room);
   }
 
-  async getRoomById(id: number): Promise<Room | undefined> {
+  async getRoom(id: number): Promise<Room | undefined> {
     const [room] = await db.select().from(rooms).where(eq(rooms.id, id));
     return room;
   }
 
-  async updateRoom(id: number, data: Partial<Room>): Promise<Room> {
-    const [room] = await db
+  async updateRoom(id: number, updates: Partial<InsertRoom>): Promise<Room | undefined> {
+    const [updatedRoom] = await db
       .update(rooms)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...updates, updatedAt: new Date() })
       .where(eq(rooms.id, id))
       .returning();
-    return room;
+    return updatedRoom;
   }
 
-  async addRoomMember(roomId: number, userId: string, role = "member"): Promise<void> {
-    await db.insert(roomMembers).values({
-      roomId,
-      userId,
-      role,
-    });
+  async deleteRoom(id: number): Promise<boolean> {
+    const result = await db.delete(rooms).where(eq(rooms.id, id));
+    return result.rowCount > 0;
   }
 
-  async removeRoomMember(roomId: number, userId: string): Promise<void> {
-    await db
+  async addUserToRoom(roomId: number, userId: number, role = "member"): Promise<RoomMember> {
+    const [member] = await db
+      .insert(roomMembers)
+      .values({ roomId, userId, role })
+      .returning();
+    return member;
+  }
+
+  async removeUserFromRoom(roomId: number, userId: number): Promise<boolean> {
+    const result = await db
       .delete(roomMembers)
       .where(and(eq(roomMembers.roomId, roomId), eq(roomMembers.userId, userId)));
+    return result.rowCount > 0;
   }
 
-  async getRoomMembers(roomId: number): Promise<RoomMember[]> {
-    return await db
-      .select()
-      .from(roomMembers)
-      .where(eq(roomMembers.roomId, roomId))
-      .orderBy(asc(roomMembers.joinedAt));
-  }
+  async getRoomMembers(roomId: number): Promise<User[]> {
+    const members = await db
+      .select({ user: users })
+      .from(users)
+      .innerJoin(roomMembers, eq(users.id, roomMembers.userId))
+      .where(eq(roomMembers.roomId, roomId));
 
-  // Subject/Subcategory operations
-  async createSubject(subject: InsertSubject): Promise<Subject> {
-    const [newSubject] = await db.insert(subjects).values(subject).returning();
-    return newSubject;
-  }
-
-  async createSubcategory(subcategory: InsertSubcategory): Promise<Subcategory> {
-    const [newSubcategory] = await db.insert(subcategories).values(subcategory).returning();
-    return newSubcategory;
-  }
-
-  async getRoomSubjects(roomId: number): Promise<Subject[]> {
-    return await db
-      .select()
-      .from(subjects)
-      .where(eq(subjects.roomId, roomId))
-      .orderBy(asc(subjects.name));
-  }
-
-  async getSubjectSubcategories(subjectId: number): Promise<Subcategory[]> {
-    return await db
-      .select()
-      .from(subcategories)
-      .where(eq(subcategories.subjectId, subjectId))
-      .orderBy(asc(subcategories.name));
-  }
-
-  async updateSubject(id: number, name: string): Promise<Subject> {
-    const [subject] = await db
-      .update(subjects)
-      .set({ name })
-      .where(eq(subjects.id, id))
-      .returning();
-    return subject;
-  }
-
-  async updateSubcategory(id: number, name: string): Promise<Subcategory> {
-    const [subcategory] = await db
-      .update(subcategories)
-      .set({ name })
-      .where(eq(subcategories.id, id))
-      .returning();
-    return subcategory;
-  }
-
-  async deleteSubject(id: number): Promise<void> {
-    await db.delete(subjects).where(eq(subjects.id, id));
-  }
-
-  async deleteSubcategory(id: number): Promise<void> {
-    await db.delete(subcategories).where(eq(subcategories.id, id));
+    return members.map((m) => m.user);
   }
 
   // Message operations
@@ -349,17 +266,24 @@ export class DatabaseStorage implements IStorage {
     return newMessage;
   }
 
-  async getRoomMessages(roomId: number, limit = 50, offset = 0): Promise<Message[]> {
-    return await db
-      .select()
-      .from(messages)
-      .where(and(eq(messages.roomId, roomId), eq(messages.isDeleted, false)))
-      .orderBy(desc(messages.createdAt))
-      .limit(limit)
-      .offset(offset);
+  async getMessages(roomId?: number, recipientId?: number, senderId?: number): Promise<Message[]> {
+    let query = db.select().from(messages);
+
+    if (roomId) {
+      query = query.where(eq(messages.roomId, roomId));
+    } else if (recipientId && senderId) {
+      query = query.where(
+        or(
+          and(eq(messages.senderId, senderId), eq(messages.recipientId, recipientId)),
+          and(eq(messages.senderId, recipientId), eq(messages.recipientId, senderId))
+        )
+      );
+    }
+
+    return await query.orderBy(desc(messages.createdAt));
   }
 
-  async getDirectMessages(userId1: string, userId2: string, limit = 50, offset = 0): Promise<Message[]> {
+  async getDirectMessages(userId1: number, userId2: number): Promise<Message[]> {
     return await db
       .select()
       .from(messages)
@@ -369,42 +293,24 @@ export class DatabaseStorage implements IStorage {
             and(eq(messages.senderId, userId1), eq(messages.recipientId, userId2)),
             and(eq(messages.senderId, userId2), eq(messages.recipientId, userId1))
           ),
-          eq(messages.isDeleted, false)
+          eq(messages.roomId, null)
         )
       )
-      .orderBy(desc(messages.createdAt))
-      .limit(limit)
-      .offset(offset);
+      .orderBy(asc(messages.createdAt));
   }
 
-  async updateMessage(id: number, content: string): Promise<Message> {
-    const [message] = await db
+  async updateMessage(id: number, updates: Partial<InsertMessage>): Promise<Message | undefined> {
+    const [updatedMessage] = await db
       .update(messages)
-      .set({ content })
+      .set(updates)
       .where(eq(messages.id, id))
       .returning();
-    return message;
+    return updatedMessage;
   }
 
-  async deleteMessage(id: number, userId: string): Promise<void> {
-    await db
-      .update(messages)
-      .set({ isDeleted: true, deletedAt: new Date() })
-      .where(and(eq(messages.id, id), eq(messages.senderId, userId)));
-  }
-
-  async updateMessageStatus(messageId: number, userId: string, status: string): Promise<void> {
-    await db
-      .insert(messageStatus)
-      .values({
-        messageId,
-        userId,
-        status,
-      })
-      .onConflictDoUpdate({
-        target: [messageStatus.messageId, messageStatus.userId],
-        set: { status, statusAt: new Date() },
-      });
+  async deleteMessage(id: number): Promise<boolean> {
+    const result = await db.delete(messages).where(eq(messages.id, id));
+    return result.rowCount > 0;
   }
 
   // File operations
@@ -413,154 +319,120 @@ export class DatabaseStorage implements IStorage {
     return newFile;
   }
 
-  async getRoomFiles(roomId: number, subjectId?: number, subcategoryId?: number): Promise<File[]> {
-    let query = db
-      .select()
-      .from(files)
-      .where(and(eq(files.roomId, roomId), eq(files.isDeleted, false)));
+  async getFiles(roomId?: number, uploadedById?: number): Promise<File[]> {
+    let query = db.select().from(files);
 
-    if (subjectId) {
-      query = query.where(eq(files.subjectId, subjectId));
+    if (roomId) {
+      query = query.where(eq(files.roomId, roomId));
     }
-
-    if (subcategoryId) {
-      query = query.where(eq(files.subcategoryId, subcategoryId));
+    if (uploadedById) {
+      query = query.where(eq(files.uploadedById, uploadedById));
     }
 
     return await query.orderBy(desc(files.createdAt));
   }
 
-  async getUserFiles(userId: string): Promise<File[]> {
-    return await db
-      .select()
-      .from(files)
-      .where(and(eq(files.uploaderId, userId), eq(files.isDeleted, false)))
-      .orderBy(desc(files.createdAt));
-  }
-
-  async getFileById(id: number): Promise<File | undefined> {
+  async getFile(id: number): Promise<File | undefined> {
     const [file] = await db.select().from(files).where(eq(files.id, id));
     return file;
   }
 
-  async deleteFile(id: number, userId: string): Promise<void> {
-    await db
+  async updateFile(id: number, updates: Partial<InsertFile>): Promise<File | undefined> {
+    const [updatedFile] = await db
       .update(files)
-      .set({ isDeleted: true, deletedAt: new Date() })
-      .where(and(eq(files.id, id), eq(files.uploaderId, userId)));
+      .set(updates)
+      .where(eq(files.id, id))
+      .returning();
+    return updatedFile;
   }
 
-  async searchFiles(query: string, userId: string): Promise<File[]> {
+  async deleteFile(id: number): Promise<boolean> {
+    const result = await db.delete(files).where(eq(files.id, id));
+    return result.rowCount > 0;
+  }
+
+  async getFilesBySubject(subjectId: number): Promise<File[]> {
     return await db
       .select()
       .from(files)
-      .where(
-        and(
-          eq(files.uploaderId, userId),
-          eq(files.isDeleted, false),
-          or(
-            sql`${files.originalName} ILIKE ${`%${query}%`}`,
-            sql`${files.fileName} ILIKE ${`%${query}%`}`
-          )
-        )
-      )
-      .orderBy(desc(files.createdAt))
-      .limit(20);
+      .where(eq(files.subjectId, subjectId))
+      .orderBy(desc(files.createdAt));
   }
 
-  // Call operations
-  async createCall(callerId: string, calleeId?: string, roomId?: number, callType = "voice"): Promise<Call> {
-    const [call] = await db
-      .insert(calls)
-      .values({
-        callerId,
-        calleeId,
-        roomId,
-        callType,
-        status: "pending",
-      })
-      .returning();
-    return call;
-  }
-
-  async updateCallStatus(id: number, status: string, endedAt?: Date): Promise<void> {
-    const updateData: any = { status };
-    if (status === "active" && !endedAt) {
-      updateData.startedAt = new Date();
-    }
-    if (endedAt) {
-      updateData.endedAt = endedAt;
-    }
-
-    await db.update(calls).set(updateData).where(eq(calls.id, id));
-  }
-
-  async getUserCalls(userId: string): Promise<Call[]> {
+  async getFilesBySubcategory(subcategoryId: number): Promise<File[]> {
     return await db
       .select()
-      .from(calls)
-      .where(or(eq(calls.callerId, userId), eq(calls.calleeId, userId)))
-      .orderBy(desc(calls.createdAt))
-      .limit(50);
+      .from(files)
+      .where(eq(files.subcategoryId, subcategoryId))
+      .orderBy(desc(files.createdAt));
+  }
+
+  // Subject and subcategory operations
+  async getSubjects(): Promise<Subject[]> {
+    return await db.select().from(subjects).orderBy(asc(subjects.name));
+  }
+
+  async createSubject(name: string): Promise<Subject> {
+    const [subject] = await db.insert(subjects).values({ name }).returning();
+    return subject;
+  }
+
+  async getSubcategories(subjectId?: number): Promise<Subcategory[]> {
+    let query = db.select().from(subcategories);
+    
+    if (subjectId) {
+      query = query.where(eq(subcategories.subjectId, subjectId));
+    }
+    
+    return await query.orderBy(asc(subcategories.name));
+  }
+
+  async createSubcategory(name: string, subjectId: number): Promise<Subcategory> {
+    const [subcategory] = await db
+      .insert(subcategories)
+      .values({ name, subjectId })
+      .returning();
+    return subcategory;
   }
 
   // Status operations
-  async createStatus(userId: string, content: string, type = "achievement"): Promise<Status> {
-    const [status] = await db
-      .insert(statuses)
-      .values({
-        userId,
-        content,
-        type,
-      })
-      .returning();
-    return status;
-  }
-
-  async getUserStatuses(userId: string): Promise<Status[]> {
-    return await db
-      .select()
-      .from(statuses)
-      .where(and(eq(statuses.userId, userId), eq(statuses.isDeleted, false)))
-      .orderBy(desc(statuses.createdAt))
-      .limit(20);
-  }
-
-  async getFriendsStatuses(userId: string): Promise<Status[]> {
-    const friends = await this.getFriends(userId);
-    if (friends.length === 0) return [];
-
-    return await db
-      .select()
-      .from(statuses)
+  async updateUserStatus(userId: number, status: string, roomId?: number): Promise<Status> {
+    // Delete existing status for this user/room combination
+    await db
+      .delete(statuses)
       .where(
-        and(
-          inArray(statuses.userId, friends.map(f => f.id)),
-          eq(statuses.isDeleted, false)
-        )
-      )
-      .orderBy(desc(statuses.createdAt))
-      .limit(50);
+        roomId
+          ? and(eq(statuses.userId, userId), eq(statuses.roomId, roomId))
+          : and(eq(statuses.userId, userId), eq(statuses.roomId, null))
+      );
+
+    // Insert new status
+    const [newStatus] = await db
+      .insert(statuses)
+      .values({ userId, status, roomId, lastSeen: new Date() })
+      .returning();
+    return newStatus;
   }
 
-  async addStatusReaction(statusId: number, userId: string, reaction: string): Promise<void> {
-    await db
-      .insert(statusReactions)
-      .values({
-        statusId,
-        userId,
-        reaction,
-      })
-      .onConflictDoUpdate({
-        target: [statusReactions.statusId, statusReactions.userId],
-        set: { reaction, createdAt: new Date() },
-      });
+  async getUserStatuses(userIds: number[]): Promise<Status[]> {
+    if (userIds.length === 0) return [];
+    
+    return await db
+      .select()
+      .from(statuses)
+      .where(inArray(statuses.userId, userIds))
+      .orderBy(desc(statuses.lastSeen));
   }
 
-  async removeStatusReaction(statusId: number, userId: string): Promise<void> {
-    await db
-      .delete(statusReactions)
-      .where(and(eq(statusReactions.statusId, statusId), eq(statusReactions.userId, userId)));
+  async deleteUserStatus(userId: number, roomId?: number): Promise<boolean> {
+    const result = await db
+      .delete(statuses)
+      .where(
+        roomId
+          ? and(eq(statuses.userId, userId), eq(statuses.roomId, roomId))
+          : eq(statuses.userId, userId)
+      );
+    return result.rowCount > 0;
   }
 }
 
