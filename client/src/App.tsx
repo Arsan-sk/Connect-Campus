@@ -26,12 +26,21 @@ function Router() {
         <>
           <Route path="/" component={Home} />
           <Route path="/dashboard" component={Home} />
+          <Route path="/chat" component={Home} />
+          <Route path="/chat/:id" component={Home} />
+          <Route path="/rooms" component={Home} />
+          <Route path="/rooms/:id" component={Home} />
+          <Route path="/files" component={Home} />
+          <Route path="/friends" component={Home} />
+          <Route path="/discover" component={Home} />
+          <Route path="/profile" component={Home} />
         </>
       ) : (
         <>
           <Route path="/" component={Landing} />
           <Route path="/auth" component={AuthPage} />
           <Route path="/login" component={AuthPage} />
+          <Route path="/register" component={AuthPage} />
         </>
       )}
       <Route component={NotFound} />
