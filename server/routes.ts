@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, requireAuth } from "./auth";
+import { setupSimpleAuth, requireAuth } from "./simple-auth";
 import {
   insertUserSchema,
   insertRoomSchema,
@@ -28,7 +28,7 @@ const roomConnections = new Map<number, Set<WebSocket>>();
 
 export function registerRoutes(app: Express): Server {
   // Setup authentication routes first
-  setupAuth(app);
+  setupSimpleAuth(app);
 
   // User management routes
   app.get("/api/users/search", requireAuth, async (req: any, res) => {

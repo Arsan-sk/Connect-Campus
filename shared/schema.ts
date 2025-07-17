@@ -86,7 +86,7 @@ export const subcategories = pgTable("subcategories", {
 });
 
 // Messages
-export const messages = pgTable("messages", {
+export const messages: any = pgTable("messages", {
   id: serial("id").primaryKey(),
   content: text("content"),
   senderId: integer("sender_id").notNull().references(() => users.id),

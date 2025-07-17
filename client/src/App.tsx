@@ -23,11 +23,15 @@ function Router() {
   return (
     <Switch>
       {user ? (
-        <Route path="/" component={Home} />
+        <>
+          <Route path="/" component={Home} />
+          <Route path="/dashboard" component={Home} />
+        </>
       ) : (
         <>
           <Route path="/" component={Landing} />
           <Route path="/auth" component={AuthPage} />
+          <Route path="/login" component={AuthPage} />
         </>
       )}
       <Route component={NotFound} />
