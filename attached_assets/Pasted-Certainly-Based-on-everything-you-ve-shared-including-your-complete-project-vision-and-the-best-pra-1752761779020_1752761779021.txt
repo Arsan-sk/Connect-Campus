@@ -1,0 +1,154 @@
+Certainly! Based on everything you've shared—including your complete project vision and the best practices from Google’s 69-page prompt engineering white paper—here is a **highly structured, clear, and optimized prompt** designed for **Replit or Cursor-based AI coding tools** (like IDE agents) to generate a **productive, working web app**:
+
+---
+
+### ✅ Enhanced Prompt (Ready-to-Use for Replit/Cursor IDE Agent)
+
+> **Prompt:**
+
+You are a full-stack AI developer assistant. Based on the detailed project description below, your task is to help design and build a complete, responsive, and modern social-educational web app specifically focused on solving unstructured academic file-sharing issues among students. Use **React.js**, **Tailwind CSS**, **Node.js**, and **PostgreSQL**, and ensure best practices for UI/UX, security, and modularity.
+
+---
+
+### 📘 **Project Overview:**
+
+Build a WhatsApp-like communication platform but tailored for academic collaboration, file organization, and structured group learning. It includes two key areas: **1-on-1 chats** and **custom group rooms** (called "Rooms"). Each room allows file classification per subject and subcategory, enabling easy retrieval, collaboration, and personal productivity for students.
+
+---
+
+### 🎯 **Core Features to Implement:**
+
+#### 🔐 Authentication & Profile:
+
+* Username + password login/signup
+* Unique username, profile pic, editable bio
+* Settings & logout options
+
+#### 👥 Social Layer:
+
+* Search users by username
+* Send/receive friend requests (like Instagram)
+* Start personal chats after accepting request
+
+#### 💬 One-to-One Chats:
+
+* Chat with text, voice notes, file sharing
+* File type detection (img/pdf/doc/video/etc)
+* File naming enforced before upload
+* Files organized per chat and retrievable via filter
+* Seen/delivered message ticks (✔ / ✔✔ / blue ✔✔)
+* Auto-delete chat/file after user-defined duration
+* Personal chat file sections (image, doc, etc)
+
+#### 🏠 Rooms (Group Chats with Structure):
+
+* Created by "CR" (room creator)
+* CR sets:
+
+  * Room name, image
+  * Subjects (editable, add/remove)
+  * Subcategories: Notes, PYQs, Assignments, Practicals, etc (editable)
+* Add members from friend list or search
+* File Upload Flow:
+
+  * Select file type
+  * Choose subject
+  * Choose subcategory
+  * Rename file
+  * Prevent duplicate names
+  * File auto-tagged and saved in structured folders
+* In-room chat with support for images/docs/videos
+* Group Info Section:
+
+  * Member list, leave/delete options
+  * Tree-view file explorer (Subject > Sub-type > Files)
+  * Filters for file type (pdf/img/etc)
+
+#### 📞 Calling Features:
+
+* 1-to-1 voice call
+* Group whiteboard video call:
+
+  * Collaborative whiteboard with real-time sync
+  * Voice-enabled for live discussions
+
+#### 🌟 Status & Leaderboard:
+
+* Story-style achievement updates
+* Peers can react (e.g., likes)
+* Show leaderboard based on:
+
+  * Reactions from friends
+  * Reactions in specific room
+
+#### 🔍 Smart File Search:
+
+* File search assistant or chatbot
+* User provides filename/type → chatbot retrieves file from structured path
+
+#### 🗑️ File & Chat Control:
+
+* User can delete own files/messages
+* CR can delete any room content
+* Auto-delete file/message timer (user-defined)
+* Files remain visible but marked deleted until removed
+* Option to back up user files to Google Drive
+
+---
+
+### 🧱 **Technical Requirements:**
+
+#### 💻 Frontend:
+
+* React.js + Tailwind CSS
+* Fully responsive (mobile, tablet, desktop)
+* Modern UI with animations, interactive components
+
+#### 🛠 Backend:
+
+* Node.js (Express)
+* RESTful API endpoints for:
+
+  * Auth
+  * Friends
+  * Messaging
+  * Room management
+  * File uploads/deletion
+  * Search
+* Real-time features via Socket.IO
+
+#### 🗃 Database (PostgreSQL):
+
+* Users, Friends, Rooms, Subjects, Messages, Files, Permissions
+* Support nested file organization
+* Metadata for search/filter (type, subject, date, uploader, etc)
+* Deletion tracking and expiry timestamps
+
+#### ☁️ Storage:
+
+* Use local file system or cloud (AWS S3 / Firebase) for uploads
+* Google Drive API for optional user backup
+
+---
+
+### 🧠 UX Guidelines:
+
+* Easy navigation (tabs/sections for Rooms, Chats, Calls, Status)
+* Accessible file structure browsing
+* Smooth interaction for upload, search, deletion
+* Gamified leaderboard visuals
+* Use tooltips, modals, progress loaders where needed
+
+---
+
+### 🚀 Final Instructions:
+
+Generate the initial structure, backend routes, frontend pages, and essential components. Create clean, modular code with file separation. Prioritize core functionality first (auth, chats, room creation, file handling), then gradually add enhancements like whiteboard call, status feed, and leaderboard.
+
+Document your decisions inline as comments. Use test data where needed.
+
+---
+
+### 🧠 Bonus:
+
+Use a **step-by-step reasoning approach** while generati...
