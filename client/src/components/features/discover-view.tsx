@@ -36,7 +36,7 @@ export default function DiscoverView() {
   // Search users
   const { data: searchResults = [], isLoading: searchLoading } = useQuery<User[]>({
     queryKey: ["/api/users/search", searchQuery],
-    enabled: searchQuery.length > 2,
+    enabled: searchQuery.length >= 1,
   });
 
   // Get friends
@@ -52,7 +52,7 @@ export default function DiscoverView() {
   // Send friend request mutation
   const sendRequestMutation = useMutation({
     mutationFn: async (userId: number) => {
-      const response = await apiRequest("POST", "/api/friends/request", { userId });
+      const response = await apiRequest("POST", "/api/friends/request", { addresseeId: userId });
       return response.json();
     },
     onSuccess: () => {
@@ -180,7 +180,7 @@ export default function DiscoverView() {
               </div>
             )}
             {!showActions && !isRequest && (
-              <Button size="sm" variant="outline">
+              <Button size="sm" variant="outline" onClick={() => window.location.href = `/chat/${user.id}`}>
                 <MessageCircle className="h-4 w-4 mr-1" />
                 Message
               </Button>
@@ -191,8 +191,8 @@ export default function DiscoverView() {
     </Card>
   );
 
-  const incomingRequests = friendRequests.filter(req => req.status === 'pending');
-  const sentRequests = friendRequests.filter(req => req.status === 'sent');
+  const incomingRequests = friendRequests.filter(req => req.type === 'incoming');
+  const sentRequests = friendRequests.filter(req => req.type === 'sent');
 
   return (
     <div className="space-y-6">
@@ -238,9 +238,9 @@ export default function DiscoverView() {
               <div className="mt-6 space-y-3">
                 {searchLoading ? (
                   <div className="text-center py-8 text-gray-500">Searching...</div>
-                ) : searchQuery.length <= 2 ? (
+                ) : searchQuery.length < 1 ? (
                   <div className="text-center py-8 text-gray-500">
-                    Enter at least 3 characters to search for people
+                    Enter a name or username to search for people
                   </div>
                 ) : searchResults.length === 0 ? (
                   <div className="text-center py-8 text-gray-500">
@@ -293,7 +293,7 @@ export default function DiscoverView() {
                     {incomingRequests.map((request) => (
                       <UserCard 
                         key={request.id} 
-                        user={request.requester} 
+                        user={request.user} 
                         isRequest 
                         request={request} 
                       />
@@ -312,14 +312,14 @@ export default function DiscoverView() {
                       <div key={request.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                         <div className="flex items-center space-x-3">
                           <Avatar>
-                            <AvatarImage src={request.addressee.profileImageUrl} />
+                            <AvatarImage src={request.user.profileImageUrl} />
                             <AvatarFallback>
-                              {request.addressee.firstName?.[0] || request.addressee.username[0]?.toUpperCase()}
+                              {request.user.firstName?.[0] || request.user.username[0]?.toUpperCase()}
                             </AvatarFallback>
                           </Avatar>
                           <div>
                             <p className="font-medium">
-                              {request.addressee.firstName || request.addressee.username}
+                              {request.user.firstName || request.user.username}
                             </p>
                             <p className="text-sm text-gray-500">
                               Sent {new Date(request.createdAt).toLocaleDateString()}

@@ -9,6 +9,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Send, Phone, Video, MoreVertical, Search, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useSocket } from "@/hooks/useSocket";
 
 interface Chat {
   id: number;
@@ -34,6 +35,7 @@ interface Message {
   senderId: number;
   chatId: number;
   createdAt: string;
+  status: 'sent' | 'delivered' | 'read';
   sender: {
     id: number;
     username: string;
@@ -49,6 +51,9 @@ export default function ChatView() {
   const [selectedChatId, setSelectedChatId] = useState<number | null>(null);
   const [messageText, setMessageText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // WebSocket connection for real-time updates
+  const { isConnected, sendMessage } = useSocket();
 
   // Extract chat ID from URL if present
   useEffect(() => {
@@ -62,48 +67,78 @@ export default function ChatView() {
   }, [location]);
 
   // Fetch user's chats
-  const { data: chats = [], isLoading: chatsLoading } = useQuery<Chat[]>({
+  const { data: chats = [], isLoading: chatsLoading, error: chatsError } = useQuery<Chat[]>({
     queryKey: ["/api/chats"],
-    refetchInterval: 5000, // Refresh every 5 seconds
+    // Real-time updates via WebSocket, no need for polling
   });
 
   // Fetch messages for selected chat
-  const { data: messages = [], isLoading: messagesLoading } = useQuery<Message[]>({
+  const { data: messages = [], isLoading: messagesLoading, error: messagesError } = useQuery<Message[]>({
     queryKey: ["/api/chats", selectedChatId, "messages"],
     enabled: !!selectedChatId,
-    refetchInterval: 2000, // Refresh every 2 seconds
+    // Real-time updates via WebSocket, no need for polling
   });
 
-  // Send message mutation
-  const sendMessageMutation = useMutation({
-    mutationFn: async (data: { chatId: number; content: string }) => {
-      const response = await apiRequest("POST", `/api/chats/${data.chatId}/messages`, {
-        content: data.content,
-      });
-      return response.json();
-    },
-    onSuccess: () => {
-      setMessageText("");
-      queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/chats", selectedChatId, "messages"] });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Failed to send message",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
+  // Mark messages as read when chat is selected
+  useEffect(() => {
+    if (selectedChatId && messages.length > 0) {
+      // Mark all unread messages as read
+      const unreadMessages = messages.filter(msg => 
+        msg.senderId !== user?.id && msg.status !== 'read'
+      );
+      
+      if (unreadMessages.length > 0) {
+        // Mark the chat as read
+        apiRequest('POST', `/api/chats/${selectedChatId}/read`, {}).catch(error => {
+          console.error('Failed to mark messages as read:', error);
+        });
+      }
+    }
+  }, [selectedChatId, messages, user?.id]);
+
+  // State for tracking message sending
+  const [isSending, setIsSending] = useState(false);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageText.trim() || !selectedChatId) return;
+    if (!messageText.trim() || !selectedChatId || isSending || !isConnected) return;
     
-    sendMessageMutation.mutate({
-      chatId: selectedChatId,
-      content: messageText.trim(),
-    });
+    setIsSending(true);
+    
+    // Find the recipient (other participant in the chat)
+    const recipientId = selectedChat?.participants.find(p => p.id !== user?.id)?.id;
+    
+    if (!recipientId || !user?.id) {
+      toast({
+        title: "Cannot send message",
+        description: "Missing recipient or sender information",
+        variant: "destructive",
+      });
+      setIsSending(false);
+      return;
+    }
+    
+    const messageData = {
+      data: {
+        content: messageText.trim(),
+        senderId: user.id,
+        recipientId: recipientId,
+      }
+    };
+    
+    try {
+      sendMessage(messageData);
+      setMessageText(""); // Clear input immediately for better UX
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      toast({
+        title: "Failed to send message",
+        description: "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const scrollToBottom = () => {
@@ -116,6 +151,47 @@ export default function ChatView() {
 
   const selectedChat = chats.find(chat => chat.id === selectedChatId);
   const otherParticipant = selectedChat?.participants.find(p => p.id !== user?.id);
+
+  // Debug information
+  console.log("ChatView Debug:", { 
+    user, 
+    chats, 
+    chatsLoading, 
+    chatsError, 
+    selectedChatId, 
+    isConnected 
+  });
+
+  // Show error states
+  if (chatsError) {
+    return (
+      <div className="h-[calc(100vh-8rem)] flex items-center justify-center bg-white dark:bg-gray-800 rounded-lg shadow-sm">
+        <div className="text-center p-8">
+          <h2 className="text-xl font-bold mb-2 text-red-600">Error Loading Chats</h2>
+          <p className="text-gray-600 mb-4">{chatsError.message}</p>
+          <Button 
+            onClick={() => window.location.reload()} 
+            variant="outline"
+          >
+            Try Again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading state
+  if (chatsLoading) {
+    return (
+      <div className="h-[calc(100vh-8rem)] flex items-center justify-center bg-white dark:bg-gray-800 rounded-lg shadow-sm">
+        <div className="text-center p-8">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <h2 className="text-lg font-medium mb-2">Loading your chats...</h2>
+          <p className="text-gray-500">This might take a moment</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-[calc(100vh-8rem)] flex bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
@@ -248,14 +324,23 @@ export default function ChatView() {
                           : "bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white"
                       }`}>
                         <p>{message.content}</p>
-                        <p className={`text-xs mt-1 ${
+                        <div className={`flex items-center justify-between mt-1 ${
                           isOwn ? "text-indigo-200" : "text-gray-500"
                         }`}>
-                          {new Date(message.createdAt).toLocaleTimeString([], { 
-                            hour: '2-digit', 
-                            minute: '2-digit' 
-                          })}
-                        </p>
+                          <p className="text-xs">
+                            {new Date(message.createdAt).toLocaleTimeString([], { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })}
+                          </p>
+                          {isOwn && (
+                            <div className="text-xs ml-2">
+                              {message.status === 'sent' && '✓'}
+                              {message.status === 'delivered' && '✓✓'}
+                              {message.status === 'read' && <span className="text-green-300">✓✓</span>}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -272,11 +357,11 @@ export default function ChatView() {
                   onChange={(e) => setMessageText(e.target.value)}
                   placeholder="Type a message..."
                   className="flex-1"
-                  disabled={sendMessageMutation.isPending}
+                  disabled={isSending}
                 />
                 <Button 
                   type="submit" 
-                  disabled={!messageText.trim() || sendMessageMutation.isPending}
+                  disabled={!messageText.trim() || isSending}
                 >
                   <Send className="h-4 w-4" />
                 </Button>

@@ -7,6 +7,7 @@ import FilesView from "@/components/features/files-view";
 import DiscoverView from "@/components/features/discover-view";
 import ProfileView from "@/components/features/profile-view";
 import DashboardOverview from "@/components/features/dashboard-overview";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 export default function Home() {
   const { user } = useAuth();
@@ -26,7 +27,11 @@ export default function Home() {
   // Route content based on URL
   const renderContent = () => {
     if (location.startsWith("/chat")) {
-      return <ChatView />;
+      return (
+        <ErrorBoundary>
+          <ChatView />
+        </ErrorBoundary>
+      );
     } else if (location.startsWith("/rooms")) {
       return <RoomsView />;
     } else if (location.startsWith("/files")) {

@@ -14,7 +14,8 @@ import {
   LogOut,
   Plus,
   Menu,
-  X
+  X,
+  Home
 } from "lucide-react";
 
 export default function Navbar() {
@@ -27,6 +28,7 @@ export default function Navbar() {
   };
 
   const navItems = [
+    { icon: Home, label: "Dashboard", path: "/", count: 0 },
     { icon: MessageCircle, label: "Chats", path: "/chat", count: 0 },
     { icon: Users, label: "Rooms", path: "/rooms", count: 0 },
     { icon: FileText, label: "Files", path: "/files", count: 0 },
@@ -55,7 +57,7 @@ export default function Navbar() {
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-1">
             {navItems.map((item) => {
-              const isActive = location.startsWith(item.path);
+              const isActive = item.path === "/" ? location === "/" : location.startsWith(item.path);
               return (
                 <button
                   key={item.path}
@@ -140,7 +142,7 @@ export default function Navbar() {
         <div className="md:hidden border-t border-gray-200 dark:border-gray-700 pt-3 mt-3">
           <div className="space-y-1">
             {navItems.map((item) => {
-              const isActive = location.startsWith(item.path);
+              const isActive = item.path === "/" ? location === "/" : location.startsWith(item.path);
               return (
                 <button
                   key={item.path}

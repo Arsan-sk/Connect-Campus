@@ -31,23 +31,27 @@ export function registerRoutes(app: Express): Server {
   setupSimpleAuth(app);
 
   // User management routes
-  app.get("/api/users/search", requireAuth, async (req: any, res) => {
+  app.get("/api/users/search/:query", requireAuth, async (req: any, res) => {
     try {
-      const { q } = req.query;
-      if (!q || typeof q !== "string") {
+      const { query } = req.params;
+      if (!query || typeof query !== "string") {
         return res.status(400).json({ message: "Search query required" });
       }
       
-      const users = await storage.searchUsers(q);
-      // Remove sensitive data
-      const sanitizedUsers = users.map(user => ({
-        id: user.id,
-        username: user.username,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        profileImageUrl: user.profileImageUrl,
-        bio: user.bio,
-        status: user.status,
+      const users = await storage.searchUsers(query);
+      // Remove sensitive data and add friendship status
+      const sanitizedUsers = await Promise.all(users.map(async (user) => {
+        const isFriend = await storage.areFriends(req.user.id, user.id);
+        return {
+          id: user.id,
+          username: user.username,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          profileImageUrl: user.profileImageUrl,
+          bio: user.bio,
+          status: user.status,
+          isFriend,
+        };
       }));
       
       res.json(sanitizedUsers);
@@ -161,7 +165,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.patch("/api/friends/requests/:id/accept", requireAuth, async (req: any, res) => {
+  app.post("/api/friends/requests/:id/accept", requireAuth, async (req: any, res) => {
     try {
       const requestId = parseInt(req.params.id);
       if (isNaN(requestId)) {
@@ -180,7 +184,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.patch("/api/friends/requests/:id/reject", requireAuth, async (req: any, res) => {
+  app.post("/api/friends/requests/:id/reject", requireAuth, async (req: any, res) => {
     try {
       const requestId = parseInt(req.params.id);
       if (isNaN(requestId)) {
@@ -200,6 +204,26 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Room management routes
+  app.get("/api/rooms/public", requireAuth, async (req: any, res) => {
+    try {
+      const rooms = await storage.getPublicRooms();
+      res.json(rooms);
+    } catch (error) {
+      console.error("Error fetching public rooms:", error);
+      res.status(500).json({ message: "Failed to fetch public rooms" });
+    }
+  });
+  
+  app.get("/api/rooms/my", requireAuth, async (req: any, res) => {
+    try {
+      const rooms = await storage.getRooms(req.user.id);
+      res.json(rooms);
+    } catch (error) {
+      console.error("Error fetching user rooms:", error);
+      res.status(500).json({ message: "Failed to fetch user rooms" });
+    }
+  });
+
   app.get("/api/rooms", requireAuth, async (req: any, res) => {
     try {
       const rooms = await storage.getRooms(req.user.id);
@@ -406,6 +430,160 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Chat routes
+  app.get("/api/chats", requireAuth, async (req: any, res) => {
+    try {
+      // Get direct messages for the current user
+      const directMessages = await storage.getDirectMessageChats(req.user.id);
+      res.json(directMessages);
+    } catch (error) {
+      console.error("Error fetching chats:", error);
+      res.status(500).json({ message: "Failed to fetch chats" });
+    }
+  });
+
+  app.get("/api/chats/:chatId/messages", requireAuth, async (req: any, res) => {
+    try {
+      const chatId = parseInt(req.params.chatId);
+      if (isNaN(chatId)) {
+        return res.status(400).json({ message: "Invalid chat ID" });
+      }
+
+      // For now, treat chatId as recipientId for direct messages
+      const messages = await storage.getDirectMessages(req.user.id, chatId);
+      res.json(messages);
+    } catch (error) {
+      console.error("Error fetching chat messages:", error);
+      res.status(500).json({ message: "Failed to fetch chat messages" });
+    }
+  });
+
+  app.post("/api/chats/:chatId/messages", requireAuth, async (req: any, res) => {
+    try {
+      const chatId = parseInt(req.params.chatId);
+      if (isNaN(chatId)) {
+        return res.status(400).json({ message: "Invalid chat ID" });
+      }
+
+      const messageData = insertMessageSchema.parse({
+        content: req.body.content,
+        senderId: req.user.id,
+        recipientId: chatId, // For direct messages
+        status: "sent",
+      });
+
+      const message = await storage.createMessage(messageData);
+      
+      // Get the complete message with sender information
+      const messageWithSender = await storage.getDirectMessages(req.user.id, chatId);
+      const fullMessage = messageWithSender.find(m => m.id === message.id);
+      
+      // Broadcast to WebSocket connections
+      const recipientWs = userConnections.get(chatId);
+      const senderWs = userConnections.get(req.user.id);
+      
+      const messagePayload = JSON.stringify({
+        type: "new_message",
+        data: fullMessage || message,
+      });
+      
+      // Mark as delivered if recipient is online
+      if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+        await storage.markMessageAsDelivered(message.id);
+        message.status = "delivered";
+        message.deliveredAt = new Date();
+      }
+      
+      [recipientWs, senderWs].forEach(ws => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(messagePayload);
+        }
+      });
+
+      res.status(201).json(fullMessage || message);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+
+  // Message status routes
+  app.post("/api/messages/:messageId/read", requireAuth, async (req: any, res) => {
+    try {
+      const messageId = parseInt(req.params.messageId);
+      if (isNaN(messageId)) {
+        return res.status(400).json({ message: "Invalid message ID" });
+      }
+
+      const message = await storage.markMessageAsRead(messageId);
+      if (!message) {
+        return res.status(404).json({ message: "Message not found" });
+      }
+
+      // Notify sender via WebSocket
+      const senderWs = userConnections.get(message.senderId);
+      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+        senderWs.send(JSON.stringify({
+          type: "message_read",
+          data: { messageId: message.id, readAt: message.readAt },
+        }));
+      }
+
+      res.json(message);
+    } catch (error) {
+      console.error("Error marking message as read:", error);
+      res.status(500).json({ message: "Failed to mark message as read" });
+    }
+  });
+
+  app.post("/api/chats/:chatId/read", requireAuth, async (req: any, res) => {
+    try {
+      const chatId = parseInt(req.params.chatId);
+      if (isNaN(chatId)) {
+        return res.status(400).json({ message: "Invalid chat ID" });
+      }
+
+      // Mark all messages from this user as read
+      await storage.markChatMessagesAsRead(req.user.id, chatId);
+
+      // Notify sender via WebSocket
+      const senderWs = userConnections.get(chatId);
+      if (senderWs && senderWs.readyState === WebSocket.OPEN) {
+        senderWs.send(JSON.stringify({
+          type: "chat_messages_read",
+          data: { chatId: req.user.id, readAt: new Date() },
+        }));
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking chat messages as read:", error);
+      res.status(500).json({ message: "Failed to mark chat messages as read" });
+    }
+  });
+
+
+  // Updated file routes
+  app.get("/api/files/my", requireAuth, async (req: any, res) => {
+    try {
+      const files = await storage.getFiles(undefined, req.user.id);
+      res.json(files);
+    } catch (error) {
+      console.error("Error fetching user files:", error);
+      res.status(500).json({ message: "Failed to fetch user files" });
+    }
+  });
+
+  app.get("/api/files/shared", requireAuth, async (req: any, res) => {
+    try {
+      const files = await storage.getSharedFiles(req.user.id);
+      res.json(files);
+    } catch (error) {
+      console.error("Error fetching shared files:", error);
+      res.status(500).json({ message: "Failed to fetch shared files" });
+    }
+  });
+
   // File routes
   app.post("/api/files", requireAuth, upload.single("file"), async (req: any, res) => {
     try {
@@ -545,6 +723,63 @@ export function registerRoutes(app: Express): Server {
               roomConnections.get(leaveRoomId)!.delete(ws);
             }
             break;
+            
+          case "message":
+            // Handle incoming chat messages via WebSocket
+            const { content, recipientId, senderId } = message.data;
+            if (!content || !recipientId || !senderId) {
+              ws.send(JSON.stringify({ type: "error", message: "Invalid message data" }));
+              break;
+            }
+            
+            try {
+              const messageData = insertMessageSchema.parse({
+                content,
+                senderId,
+                recipientId,
+                status: "sent",
+              });
+              
+              const newMessage = await storage.createMessage(messageData);
+              
+              // Get the complete message with sender information
+              const messagesWithSender = await storage.getDirectMessages(senderId, recipientId);
+              const fullMessage = messagesWithSender.find(m => m.id === newMessage.id);
+              
+              // Broadcast to WebSocket connections
+              const recipientWs = userConnections.get(recipientId);
+              const senderWs = userConnections.get(senderId);
+              
+              const messagePayload = JSON.stringify({
+                type: "new_message",
+                data: fullMessage || newMessage,
+              });
+              
+              // Mark as delivered if recipient is online
+              if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+                await storage.markMessageAsDelivered(newMessage.id);
+                newMessage.status = "delivered";
+                newMessage.deliveredAt = new Date();
+              }
+              
+              // Send to both sender and recipient
+              [recipientWs, senderWs].forEach(wsConnection => {
+                if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                  wsConnection.send(messagePayload);
+                }
+              });
+              
+              // Send confirmation to sender
+              ws.send(JSON.stringify({
+                type: "message_sent",
+                data: fullMessage || newMessage,
+              }));
+              
+            } catch (error) {
+              console.error("Error processing WebSocket message:", error);
+              ws.send(JSON.stringify({ type: "error", message: "Failed to send message" }));
+            }
+            break;
         }
       } catch (error) {
         console.error("WebSocket message error:", error);
@@ -570,4 +805,25 @@ export function registerRoutes(app: Express): Server {
   });
 
   return httpServer;
+
+  function updateMessageStatus(ws, messageId, status) {
+    if (status === "delivered") {
+      storage.markMessageAsDelivered(messageId);
+    } else if (status === "read") {
+      storage.markMessageAsRead(messageId);
+    }
+    broadcastMessageStatus(messageId, status);
+  }
+
+  function broadcastMessageStatus(messageId, status) {
+    const messagePayload = JSON.stringify({
+      type: "update_message_status",
+      data: { messageId, status },
+    });
+    userConnections.forEach((ws, userId) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(messagePayload);
+      }
+    });
+  }
 }

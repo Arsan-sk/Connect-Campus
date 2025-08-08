@@ -62,7 +62,11 @@ export default function MessageBubble({ message, isOwnMessage }: MessageBubblePr
           )}
           <div className="flex items-center justify-end space-x-1 mt-1">
             <span className="text-xs text-white/70">{formatTime(message.createdAt)}</span>
-            <div className="text-secondary">✓✓</div>
+            <div className="text-xs">
+              {message.status === 'sent' && '✓'}
+              {message.status === 'delivered' && '✓✓'}
+              {message.status === 'read' && <span className="text-green-300">✓✓</span>}
+            </div>
           </div>
         </div>
       </div>

@@ -2,11 +2,29 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { MessageSquare, Users, FileText, Search, Plus, ArrowRight } from "lucide-react";
 
 export default function DashboardOverview() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
+
+  // Fetch real data for dashboard stats
+  const { data: friends = [] } = useQuery({
+    queryKey: ["/api/friends"],
+  });
+  
+  const { data: chats = [] } = useQuery({
+    queryKey: ["/api/chats"],
+  });
+  
+  const { data: rooms = [] } = useQuery({
+    queryKey: ["/api/rooms/my"],
+  });
+  
+  const { data: files = [] } = useQuery({
+    queryKey: ["/api/files/my"],
+  });
 
   const quickActions = [
     {
@@ -40,10 +58,10 @@ export default function DashboardOverview() {
   ];
 
   const stats = [
-    { label: "Active Chats", value: "0", color: "text-blue-600" },
-    { label: "Study Rooms", value: "0", color: "text-green-600" },
-    { label: "Shared Files", value: "0", color: "text-purple-600" },
-    { label: "Friends", value: "0", color: "text-orange-600" },
+    { label: "Active Chats", value: chats.length.toString(), color: "text-blue-600" },
+    { label: "Study Rooms", value: rooms.length.toString(), color: "text-green-600" },
+    { label: "Shared Files", value: files.length.toString(), color: "text-purple-600" },
+    { label: "Friends", value: friends.length.toString(), color: "text-orange-600" },
   ];
 
   return (

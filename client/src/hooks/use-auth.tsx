@@ -83,11 +83,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     onSuccess: () => {
       queryClient.setQueryData(["/api/user"], null);
+      // Redirect to landing page
+      window.location.href = "/";
     },
     onError: (error: Error) => {
       // Remove token even if logout fails
       localStorage.removeItem('auth_token');
       queryClient.setQueryData(["/api/user"], null);
+      // Redirect to landing page even if logout fails
+      window.location.href = "/";
       toast({
         title: "Logout failed",
         description: error.message,

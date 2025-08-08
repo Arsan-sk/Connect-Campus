@@ -24,7 +24,7 @@ import {
   type Status,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, desc, asc, like, inArray } from "drizzle-orm";
+import { eq, and, or, desc, asc, like, inArray, sql } from "drizzle-orm";
 
 // Interface for storage operations
 export interface IStorage {
@@ -43,6 +43,7 @@ export interface IStorage {
   getFriends(userId: number): Promise<User[]>;
   getFriendRequests(userId: number): Promise<Friendship[]>;
   getSentFriendRequests(userId: number): Promise<Friendship[]>;
+  areFriends(userId1: number, userId2: number): Promise<boolean>;
 
   // Room operations
   createRoom(room: InsertRoom): Promise<Room>;
@@ -57,7 +58,10 @@ export interface IStorage {
   // Message operations
   createMessage(message: InsertMessage): Promise<Message>;
   getMessages(roomId?: number, recipientId?: number, senderId?: number): Promise<Message[]>;
-  getDirectMessages(userId1: number, userId2: number): Promise<Message[]>;
+  getDirectMessages(userId1: number, userId2: number): Promise<any[]>;
+  markMessageAsDelivered(messageId: number): Promise<Message | undefined>;
+  markMessageAsRead(messageId: number): Promise<Message | undefined>;
+  markChatMessagesAsRead(userId: number, senderId: number): Promise<void>;
   updateMessage(id: number, updates: Partial<InsertMessage>): Promise<Message | undefined>;
   deleteMessage(id: number): Promise<boolean>;
 
@@ -80,6 +84,11 @@ export interface IStorage {
   updateUserStatus(userId: number, status: string, roomId?: number): Promise<Status>;
   getUserStatuses(userIds: number[]): Promise<Status[]>;
   deleteUserStatus(userId: number, roomId?: number): Promise<boolean>;
+
+  // Chat operations
+  getDirectMessageChats(userId: number): Promise<any[]>;
+  getPublicRooms(): Promise<Room[]>;
+  getSharedFiles(userId: number): Promise<File[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -174,13 +183,90 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(users).where(inArray(users.id, friendIds));
   }
 
-  async getFriendRequests(userId: number): Promise<Friendship[]> {
-    return await db
+  async areFriends(userId1: number, userId2: number): Promise<boolean> {
+    const [friendship] = await db
       .select()
       .from(friendships)
       .where(
+        and(
+          or(
+            and(eq(friendships.requesterId, userId1), eq(friendships.addresseeId, userId2)),
+            and(eq(friendships.requesterId, userId2), eq(friendships.addresseeId, userId1))
+          ),
+          eq(friendships.status, "accepted")
+        )
+      )
+      .limit(1);
+    
+    return !!friendship;
+  }
+
+  async getFriendRequests(userId: number): Promise<any[]> {
+    // Get incoming friend requests with requester info
+    const incomingRequests = await db
+      .select({
+        id: friendships.id,
+        requesterId: friendships.requesterId,
+        addresseeId: friendships.addresseeId,
+        status: friendships.status,
+        createdAt: friendships.createdAt,
+        updatedAt: friendships.updatedAt,
+        requester: {
+          id: users.id,
+          username: users.username,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+          bio: users.bio,
+          status: users.status,
+        },
+      })
+      .from(friendships)
+      .innerJoin(users, eq(friendships.requesterId, users.id))
+      .where(
         and(eq(friendships.addresseeId, userId), eq(friendships.status, "pending"))
       );
+
+    // Get sent friend requests with addressee info
+    const sentRequests = await db
+      .select({
+        id: friendships.id,
+        requesterId: friendships.requesterId,
+        addresseeId: friendships.addresseeId,
+        status: friendships.status,
+        createdAt: friendships.createdAt,
+        updatedAt: friendships.updatedAt,
+        addressee: {
+          id: users.id,
+          username: users.username,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+          bio: users.bio,
+          status: users.status,
+        },
+      })
+      .from(friendships)
+      .innerJoin(users, eq(friendships.addresseeId, users.id))
+      .where(
+        and(eq(friendships.requesterId, userId), eq(friendships.status, "pending"))
+      );
+
+    // Mark incoming requests for proper handling
+    const markedIncoming = incomingRequests.map(req => ({
+      ...req,
+      type: 'incoming',
+      user: req.requester,
+    }));
+
+    // Mark sent requests for proper handling
+    const markedSent = sentRequests.map(req => ({
+      ...req,
+      type: 'sent',
+      user: req.addressee,
+    }));
+
+    return [...markedIncoming, ...markedSent];
   }
 
   async getSentFriendRequests(userId: number): Promise<Friendship[]> {
@@ -266,6 +352,37 @@ export class DatabaseStorage implements IStorage {
     return newMessage;
   }
 
+  async markMessageAsDelivered(messageId: number): Promise<Message | undefined> {
+    const [updatedMessage] = await db
+      .update(messages)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(eq(messages.id, messageId))
+      .returning();
+    return updatedMessage;
+  }
+
+  async markMessageAsRead(messageId: number): Promise<Message | undefined> {
+    const [updatedMessage] = await db
+      .update(messages)
+      .set({ status: "read", readAt: new Date() })
+      .where(eq(messages.id, messageId))
+      .returning();
+    return updatedMessage;
+  }
+
+  async markChatMessagesAsRead(userId: number, senderId: number): Promise<void> {
+    await db
+      .update(messages)
+      .set({ status: "read", readAt: new Date() })
+      .where(
+        and(
+          eq(messages.recipientId, userId),
+          eq(messages.senderId, senderId),
+          eq(messages.status, "delivered")
+        )
+      );
+  }
+
   async getMessages(roomId?: number, recipientId?: number, senderId?: number): Promise<Message[]> {
     let query = db.select().from(messages);
 
@@ -283,10 +400,28 @@ export class DatabaseStorage implements IStorage {
     return await query.orderBy(desc(messages.createdAt));
   }
 
-  async getDirectMessages(userId1: number, userId2: number): Promise<Message[]> {
-    return await db
-      .select()
+  async getDirectMessages(userId1: number, userId2: number): Promise<any[]> {
+    const messagesList = await db
+      .select({
+        id: messages.id,
+        content: messages.content,
+        senderId: messages.senderId,
+        recipientId: messages.recipientId,
+        messageType: messages.messageType,
+        status: messages.status,
+        deliveredAt: messages.deliveredAt,
+        readAt: messages.readAt,
+        createdAt: messages.createdAt,
+        sender: {
+          id: users.id,
+          username: users.username,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          profileImageUrl: users.profileImageUrl,
+        },
+      })
       .from(messages)
+      .leftJoin(users, eq(messages.senderId, users.id))
       .where(
         and(
           or(
@@ -297,6 +432,8 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(asc(messages.createdAt));
+
+    return messagesList;
   }
 
   async updateMessage(id: number, updates: Partial<InsertMessage>): Promise<Message | undefined> {
@@ -433,6 +570,135 @@ export class DatabaseStorage implements IStorage {
           : eq(statuses.userId, userId)
       );
     return result.rowCount > 0;
+  }
+
+  // Chat operations
+  async getDirectMessageChats(userId: number): Promise<any[]> {
+    // Get all friends of the current user
+    const friends = await db
+      .select({
+        friendId: sql<number>`CASE WHEN ${friendships.requesterId} = ${userId} THEN ${friendships.addresseeId} ELSE ${friendships.requesterId} END`.as('friendId'),
+      })
+      .from(friendships)
+      .where(
+        and(
+          or(
+            eq(friendships.requesterId, userId),
+            eq(friendships.addresseeId, userId)
+          ),
+          eq(friendships.status, 'accepted')
+        )
+      );
+
+    const friendIds = friends.map(f => f.friendId);
+    if (friendIds.length === 0) return [];
+
+    // Get all users the current user has exchanged messages with
+    const messagePairs = await db
+      .select({
+        senderId: messages.senderId,
+        recipientId: messages.recipientId,
+        lastMessage: messages.content,
+        lastMessageTime: messages.createdAt,
+      })
+      .from(messages)
+      .where(
+        and(
+          or(
+            eq(messages.senderId, userId),
+            eq(messages.recipientId, userId)
+          ),
+          eq(messages.roomId, null)
+        )
+      )
+      .orderBy(desc(messages.createdAt));
+
+    // Group by other user and get the latest message for each chat
+    const chatMap = new Map();
+    for (const msg of messagePairs) {
+      const otherUserId = msg.senderId === userId ? msg.recipientId : msg.senderId;
+      if (otherUserId && !chatMap.has(otherUserId)) {
+        chatMap.set(otherUserId, {
+          id: otherUserId,
+          lastMessage: {
+            content: msg.lastMessage,
+            createdAt: msg.lastMessageTime,
+            senderId: msg.senderId,
+          },
+          unreadCount: 0, // TODO: Implement read status
+        });
+      }
+    }
+
+    // Add all friends to the chat map, even if they haven't exchanged messages
+    for (const friendId of friendIds) {
+      if (!chatMap.has(friendId)) {
+        chatMap.set(friendId, {
+          id: friendId,
+          lastMessage: null,
+          unreadCount: 0,
+        });
+      }
+    }
+
+    // Get user details for each chat
+    const otherUserIds = Array.from(chatMap.keys()).filter(id => id !== null);
+    const otherUsers = await db.select().from(users).where(inArray(users.id, otherUserIds));
+    
+    return otherUsers.map(user => ({
+      ...chatMap.get(user.id),
+      participants: [
+        {
+          id: user.id,
+          username: user.username,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          profileImageUrl: user.profileImageUrl,
+          status: user.status,
+        },
+      ],
+    })).sort((a, b) => {
+      // Sort by last message time, with chats without messages at the end
+      if (!a.lastMessage && !b.lastMessage) return 0;
+      if (!a.lastMessage) return 1;
+      if (!b.lastMessage) return -1;
+      return new Date(b.lastMessage.createdAt).getTime() - new Date(a.lastMessage.createdAt).getTime();
+    });
+  }
+
+  async getPublicRooms(): Promise<Room[]> {
+    // For now, return all rooms. In a real app, you'd have a privacy flag
+    return await db.select().from(rooms).orderBy(desc(rooms.createdAt));
+  }
+
+  async getSharedFiles(userId: number): Promise<File[]> {
+    // Get files that are marked as public or shared in rooms the user is a member of
+    const userRoomIds = await db
+      .select({ roomId: roomMembers.roomId })
+      .from(roomMembers)
+      .where(eq(roomMembers.userId, userId));
+    
+    const roomIds = userRoomIds.map(r => r.roomId);
+    
+    if (roomIds.length === 0) {
+      // If user is not in any rooms, only return public files
+      return await db
+        .select()
+        .from(files)
+        .where(eq(files.isPublic, true))
+        .orderBy(desc(files.createdAt));
+    }
+    
+    return await db
+      .select()
+      .from(files)
+      .where(
+        or(
+          eq(files.isPublic, true),
+          inArray(files.roomId, roomIds)
+        )
+      )
+      .orderBy(desc(files.createdAt));
   }
 }
 

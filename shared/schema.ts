@@ -93,11 +93,14 @@ export const messages: any = pgTable("messages", {
   recipientId: integer("recipient_id").references(() => users.id), // For direct messages
   roomId: integer("room_id").references(() => rooms.id), // For room messages
   messageType: varchar("message_type").notNull().default("text"), // text, file, image, etc.
+  status: varchar("status").notNull().default("sent"), // sent, delivered, read
   isDeleted: boolean("is_deleted").default(false),
   deletedAt: timestamp("deleted_at"),
   expiresAt: timestamp("expires_at"),
   fileId: integer("file_id").references(() => files.id),
   replyToId: integer("reply_to_id").references(() => messages.id),
+  deliveredAt: timestamp("delivered_at"),
+  readAt: timestamp("read_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

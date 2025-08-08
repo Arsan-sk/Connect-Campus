@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { useAuth } from "./useAuth";
+import { useAuth } from "./use-auth";
+import { queryClient } from "@/lib/queryClient";
 
 interface SocketMessage {
   type: string;
@@ -30,10 +31,22 @@ export function useSocket(roomId?: number) {
 
     ws.onopen = () => {
       setIsConnected(true);
-      // Join with user ID
+      // Authenticate with user ID
       ws.send(JSON.stringify({
-        type: "join",
+        type: "authenticate",
         userId: user.id,
+      }));
+      
+      // Join room if specified
+      if (roomId) {
+        ws.send(JSON.stringify({
+          type: "join_room",
+          roomId,
+        }));
+      }
+
+      ws.send(JSON.stringify({
+        type: "subscribe_status_updates"
       }));
     };
 
@@ -42,8 +55,24 @@ export function useSocket(roomId?: number) {
         const data = JSON.parse(event.data);
         
         switch (data.type) {
-          case "message":
-            // Handle incoming message - you might want to add this to a global state
+          case "authenticated":
+            console.log("WebSocket authenticated for user:", data.userId);
+            break;
+            
+          case "joined_room":
+            console.log("Joined room:", data.roomId);
+            break;
+            
+          case "new_message":
+            // Invalidate chat queries to refresh messages
+            queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
+            if (data.data?.roomId) {
+              queryClient.invalidateQueries({ queryKey: ["/api/rooms", data.data.roomId, "messages"] });
+            }
+            if (data.data?.recipientId || data.data?.senderId) {
+              queryClient.invalidateQueries({ queryKey: ["/api/chats", data.data.recipientId || data.data.senderId, "messages"] });
+            }
             break;
             
           case "typing":
@@ -58,6 +87,24 @@ export function useSocket(roomId?: number) {
             }
             break;
             
+          case "update_message_status":
+            // Update message status locally
+            queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
+            // Invalidate all message queries to ensure status updates are reflected
+            queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
+            break;
+            
+          case "message_read":
+            // Handle individual message read updates
+            queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
+            break;
+            
+          case "chat_messages_read":
+            // Handle bulk message read updates
+            queryClient.invalidateQueries({ queryKey: ["/api/chats"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/messages"] });
+            break;
           case "call":
             // Handle call signaling
             break;
@@ -77,6 +124,12 @@ export function useSocket(roomId?: number) {
     };
 
     return () => {
+      if (roomId) {
+        ws.send(JSON.stringify({
+          type: "leave_room",
+          roomId,
+        }));
+      }
       ws.close();
     };
   }, [user, roomId]);
